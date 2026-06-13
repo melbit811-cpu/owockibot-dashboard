@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Owockibot Bounty Payout Transparency Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;line-height:1.6}
+.container{max-width:1200px;margin:0 auto;padding:20px}
+h1{text-align:center;color:#39d353;font-size:1.8em;margin-bottom:5px}
+.subtitle{text-align:center;color:#8b949e;font-size:.9em;margin-bottom:25px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:15px;margin-bottom:30px}
+.stat{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;text-align:center}
+.stat-value{font-size:2em;font-weight:bold;color:#39d353}
+.stat-label{color:#8b949e;font-size:.85em;margin-top:5px}
+.chart-section{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:25px}
+.chart-section h2{color:#58a6ff;font-size:1.2em;margin-bottom:15px}
+canvas{width:100%!important;height:300px!important}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.85em}
+th{background:#21262d;color:#58a6ff;padding:10px;text-align:left;position:sticky;top:0}
+td{padding:8px 10px;border-bottom:1px solid #21262d}
+tr:hover{background:#161b22}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.loading{text-align:center;padding:60px;color:#8b949e}
+.error{text-align:center;padding:40px;color:#f85149}
+.refresh-btn{background:#238636;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.9em;margin-bottom:20px}
+.refresh-btn:hover{background:#2ea043}
+.top-builders{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin-bottom:20px}
+.builder-card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px;display:flex;justify-content:space-between;align-items:center}
+.builder-rank{color:#8b949e;font-size:.8em;width:30px}
+.builder-addr{font-family:monospace;font-size:.8em;color:#c9d1d9;flex:1;margin:0 10px}
+.builder-earn{color:#39d353;font-weight:bold;font-size:.95em}
+.tabs{display:flex;gap:5px;margin-bottom:15px}
+.tab{padding:8px 16px;background:#21262d;border:1px solid #30363d;border-radius:6px;cursor:pointer;color:#8b949e;font-size:.85em}
+.tab.active{background:#1a2a3a;color:#58a6ff;border-color:#58a6ff}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>💰 Owockibot Payout Transparency</h1>
+<p class="subtitle">Safe: 0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be on Base &bull; USDC Payouts Only</p>
+<button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
+<div id="loading" class="loading">Loading payout data...</div>
+<div id="content" style="display:none">
+<div class="stats" id="stats"></div>
+<div class="chart-section">
+<h2>📊 Payout Timeline</h2>
+<canvas id="timelineChart"></canvas>
+</div>
+<div class="chart-section">
+<h2>🏆 Top Builders by Earnings</h2>
+<div class="top-builders" id="topBuilders"></div>
+</div>
+<div class="chart-section">
+<h2>📋 All Payout Transactions</h2>
+<div class="tabs">
+<div class="tab active" onclick="showTab('all',this)">All</div>
+<div class="tab" onclick="showTab('big',this)">Big (50+ USDC)</div>
+<div class="tab" onclick="showTab('small',this)">Small (&lt;50 USDC)</div>
+</div>
+<div class="table-wrap">
+<table id="txTable">
+<thead><tr><th>Date</th><th>Recipient</th><th>Amount (USDC)</th><th>Nonce</th><th>Basescan</th></tr></thead>
+<tbody id="txBody"></tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<script>
+const SAFE="0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be";
+const API="https://api.safe.global/tx-service/base/api/v1/safes/"+SAFE+"/multisig-transactions/?limit=100&trusted=true";
+const USDC="0x833589fcd6edbe08f4c7c32d4f71b54bda02913";
+const BASESCAN="https://basescan.org/tx/";
+let allPayouts=[];
+let currentTab="all";
+function tr(addr){if(!addr||addr.length<10)return addr;return addr.slice(0,8)+"..."+addr.slice(-6);}
+async function loadData(){
+  document.getElementById("loading").style.display="block";
+  document.getElementById("content").style.display="none";
+  try{
+    let allTx=[];let offset=0;
+    while(true){
+      const r=await fetch(API+"&offset="+offset);
+      const d=await r.json();
+      const res=d.results||[];
+      allTx=allTx.concat(res);
+      if(res.length<100)break;
+      offset+=100;
+    }
+    allPayouts=[];
+    for(const t of allTx){
+      const toAddr=(t.to||"").toLowerCase();
+      const dd=t.dataDecoded||{};
+      const method=dd.method||"";
+      if(toAddr===USDC&&method==="transfer"&&t.isExecuted){
+        const params=dd.parameters||[];
+        let recipient="",amountRaw=0;
+        for(const p of params){
+          if(p.name==="to")recipient=p.value||"";
+          if(p.name==="value")amountRaw=parseInt(p.value||"0");
+        }
+        allPayouts.push({date:t.executionDate?t.executionDate.slice(0,10):"",recipient,amount:amountRaw/1e6,txHash:t.transactionHash||"",nonce:t.nonce||0});
+      }
+    }
+    allPayouts.sort((a,b)=>a.date.localeCompare(b.date));
+    renderAll();
+    document.getElementById("loading").style.display="none";
+    document.getElementById("content").style.display="block";
+  }catch(e){
+    document.getElementById("loading").innerHTML="<div class="error">Failed to load data: "+e.message+"</div>";
+  }
+}
+function renderAll(){
+  const total=allPayouts.reduce((s,p)=>s+p.amount,0);
+  const avg=allPayouts.length?total/allPayouts.length:0;
+  const unique=new Set(allPayouts.map(p=>p.recipient)).size;
+  const maxPayout=allPayouts.length?Math.max(...allPayouts.map(p=>p.amount)):0;
+  document.getElementById("stats").innerHTML=
+    "<div class="stat"><div class="stat-value">$"+total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})+"</div><div class="stat-label">Total USDC Paid Out</div></div>"+
+    "<div class="stat"><div class="stat-value">"+allPayouts.length+"</div><div class="stat-label">Total Payouts</div></div>"+
+    "<div class="stat"><div class="stat-value">$"+avg.toFixed(2)+"</div><div class="stat-label">Average Payout</div></div>"+
+    "<div class="stat"><div class="stat-value">"+unique+"</div><div class="stat-label">Unique Builders</div></div>"+
+    "<div class="stat"><div class="stat-value">$"+maxPayout.toFixed(2)+"</div><div class="stat-label">Largest Payout</div></div>";
+  renderTimeline();
+  renderTopBuilders();
+  renderTable();
+}
+function renderTimeline(){
+  const monthly={};
+  for(const p of allPayouts){const m=p.date.slice(0,7);monthly[m]=(monthly[m]||0)+p.amount;}
+  const labels=Object.keys(monthly).sort();
+  const data=labels.map(l=>monthly[l]);
+  const canvas=document.getElementById("timelineChart");
+  const ctx=canvas.getContext("2d");
+  const w=canvas.width=canvas.parentElement.clientWidth-40;
+  const h=canvas.height=260;
+  const maxV=Math.max(...data)*1.1||1;
+  const barW=Math.min(60,(w-80)/labels.length-10);
+  ctx.clearRect(0,0,w+60,h+40);
+  ctx.fillStyle="#8b949e";ctx.font="11px sans-serif";
+  for(let i=0;i<=4;i++){const y=h-20-i*(h-40)/4;const v=(maxV*i/4).toFixed(0);ctx.fillText("$"+v,0,y+4);ctx.strokeStyle="#21262d";ctx.beginPath();ctx.moveTo(50,y);ctx.lineTo(w+40,y);ctx.stroke();}
+  for(let i=0;i<labels.length;i++){
+    const x=60+i*(barW+10);const barH=(data[i]/maxV)*(h-50);
+    const grd=ctx.createLinearGradient(x,h-20-barH,x,h-20);grd.addColorStop(0,"#39d353");grd.addColorStop(1,"#1a3a2a");
+    ctx.fillStyle=grd;ctx.fillRect(x,h-20-barH,barW,barH);
+    ctx.fillStyle="#8b949e";ctx.font="10px sans-serif";ctx.textAlign="center";ctx.fillText(labels[i].slice(2),x+barW/2,h-5);
+    ctx.fillStyle="#c9d1d9";ctx.font="10px sans-serif";ctx.fillText("$"+data[i].toFixed(0),x+barW/2,h-25-barH);
+  }
+}
+function renderTopBuilders(){
+  const earnings={};
+  for(const p of allPayouts){earnings[p.recipient]=(earnings[p.recipient]||0)+p.amount;}
+  const sorted=Object.entries(earnings).sort((a,b)=>b[1]-a[1]);
+  document.getElementById("topBuilders").innerHTML=sorted.map(([addr,amt],i)=>"<div class="builder-card"><span class="builder-rank">#"+(i+1)+"</span><span class="builder-addr" title=""+addr+"">"+tr(addr)+"</span><span class="builder-earn">$"+amt.toFixed(2)+"</span></div>").join("");
+}
+function showTab(tab,el){currentTab=tab;document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));el.classList.add("active");renderTable();}
+function renderTable(){
+  let filtered=allPayouts;
+  if(currentTab==="big")filtered=allPayouts.filter(p=>p.amount>=50);
+  if(currentTab==="small")filtered=allPayouts.filter(p=>p.amount<50);
+  document.getElementById("txBody").innerHTML=filtered.map(p=>"<tr><td>"+p.date+"</td><td><a href=""+BASESCAN+p.txHash+"" title=""+p.recipient+"">"+tr(p.recipient)+"</a></td><td>$"+p.amount.toFixed(2)+"</td><td>"+p.nonce+"</td><td><a href=""+BASESCAN+p.txHash+"" target="_blank">View ↗</a></td></tr>").join("");
+}
+loadData();
+</script>
+</body>
+</html>
