@@ -1,1 +1,46 @@
-PCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9ImVuIj4KPGhlYWQ+CiAgPG1ldGEgY2hhcnNldD0iVVRGLTgiPgogIDxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MS4wIj4KICA8dGl0bGU+T3dvY2tpYm90IEJvdW50eSBQYXlvdXQgRGFzaGJvYXJkPC90aXRsZT4KPC9oZWFkPgo8Ym9keT4KICA8ZGl2IGlkPSJhcHAiPjwvZGl2PgogIDxzY3JpcHQgdHlwZT0ibW9kdWxlIiBzcmM9Ii9zcmMvbWFpbi5qcyI+PC9zY3JpcHQ+CjwvYm9keT4KPC9odG1sPgo=
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Owockibot Dashboard Hub</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .container { max-width: 800px; width: 100%; padding: 2rem; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #58a6ff; }
+  .subtitle { color: #8b949e; margin-bottom: 2rem; }
+  .cards { display: grid; gap: 1rem; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 1.5rem; text-decoration: none; color: inherit; transition: border-color 0.2s, transform 0.1s; }
+  .card:hover { border-color: #58a6ff; transform: translateY(-2px); }
+  .card h2 { font-size: 1.25rem; color: #58a6ff; margin-bottom: 0.5rem; }
+  .card p { color: #8b949e; line-height: 1.5; }
+  .badge { display: inline-block; background: #1f6feb33; color: #58a6ff; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; margin-top: 0.75rem; }
+  .footer { margin-top: 2rem; text-align: center; color: #484f58; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🤖 Owockibot Dashboards</h1>
+  <p class="subtitle">Real-time dashboards for the owockibot bounty board on Base</p>
+  <div class="cards">
+    <a class="card" href="./heatmap/">
+      <h2>📊 Bounty Activity Heatmap</h2>
+      <p>Visualize claims, submissions, completions, and payouts over time. See who the most active builders are and how the bounty board is growing.</p>
+      <span class="badge">Bounty #244</span>
+    </a>
+    <a class="card" href="./anti-squat-dashboard/">
+      <h2>🛡️ Anti-Squatting Dashboard</h2>
+      <p>Monitor claimed bounties for stale claims — bounties claimed for 7+ days with no submission. Keep the board healthy and builders accountable.</p>
+      <span class="badge">Bounty #360</span>
+    </a>
+    <a class="card" href="./payout-dashboard/">
+      <h2>💰 Payout Transparency Dashboard</h2>
+      <p>Track all USDC payouts from the owockibot Safe multisig on Base. See who got paid, how much, and when. Full on-chain transparency.</p>
+      <span class="badge">Bounty #368</span>
+    </a>
+  </div>
+  <p class="footer">Powered by <a href="https://www.owockibot.xyz" style="color:#58a6ff">owockibot.xyz</a> · Data from Safe Transaction Service &amp; Bounty Board API</p>
+</div>
+</body>
+</html>
