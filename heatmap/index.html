@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Owockibot Community Heatmap</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;padding:20px}
+.container{max-width:960px;margin:0 auto}
+h1{font-size:1.5em;color:#58a6ff;margin-bottom:4px}
+.subtitle{color:#8b949e;font-size:.85em;margin-bottom:16px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;align-items:center}
+.controls input{background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:6px 10px;border-radius:6px;font-size:.85em;width:260px}
+.controls input::placeholder{color:#484f58}
+.toggle-group{display:flex;gap:4px;flex-wrap:wrap}
+.toggle-btn{padding:4px 10px;border-radius:12px;border:1px solid #30363d;background:#161b22;color:#8b949e;cursor:pointer;font-size:.8em;transition:all .15s}
+.toggle-btn.active{border-color:#39d353;color:#39d353;background:rgba(57,211,83,.08)}
+.toggle-btn[data-type=claim].active{border-color:#58a6ff;color:#58a6ff;background:rgba(88,166,255,.08)}
+.toggle-btn[data-type=submission].active{border-color:#d2a8ff;color:#d2a8ff;background:rgba(210,168,255,.08)}
+.toggle-btn[data-type=completion].active{border-color:#3fb950;color:#3fb950;background:rgba(63,185,80,.08)}
+.toggle-btn[data-type=payout].active{border-color:#f0883e;color:#f0883e;background:rgba(240,136,62,.08)}
+.heatmap-wrapper{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;overflow-x:auto}
+.heatmap{display:flex;gap:3px}
+.week{display:flex;flex-direction:column;gap:3px}
+.day{width:13px;height:13px;border-radius:2px;background:#161b22;cursor:pointer;position:relative}
+.day.l0{background:#161b22}
+.day.l1{background:#0e4429}
+.day.l2{background:#006d32}
+.day.l3{background:#26a641}
+.day.l4{background:#39d353}
+.tooltip{display:none;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:8px 12px;font-size:.75em;white-space:nowrap;z-index:100;color:#c9d1d9;pointer-events:none}
+.day:hover .tooltip{display:block}
+.months{display:flex;gap:3px;margin-bottom:4px;padding-left:0}
+.months span{width:13px;font-size:.65em;color:#8b949e;text-align:center}
+.months span.month-label{width:auto;min-width:30px}
+.stats{display:flex;flex-wrap:wrap;gap:16px;margin-top:16px}
+.stat{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;flex:1;min-width:120px}
+.stat-value{font-size:1.4em;font-weight:700;color:#58a6ff}
+.stat-label{font-size:.75em;color:#8b949e;margin-top:2px}
+.error{background:#3d1f1f;border:1px solid #f85149;color:#f85149;border-radius:8px;padding:16px;margin-bottom:16px}
+.loading{text-align:center;padding:40px;color:#8b949e}
+.legend{display:flex;align-items:center;gap:4px;margin-top:12px;font-size:.7em;color:#8b949e}
+.legend .day{cursor:default}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Owockibot Community Heatmap</h1>
+<p class="subtitle">Real-time bounty activity from the owockibot bounty board</p>
+<div id="error-container"></div>
+<div id="loading" class="loading">Loading data from API...</div>
+<div id="controls" class="controls" style="display:none">
+<input type="text" id="wallet-filter" placeholder="Filter by wallet address (0x...)">
+<div class="toggle-group">
+<button class="toggle-btn active" data-type="claim">Claims</button>
+<button class="toggle-btn active" data-type="submission">Submissions</button>
+<button class="toggle-btn active" data-type="completion">Completions</button>
+<button class="toggle-btn active" data-type="payout">Payouts</button>
+</div>
+</div>
+<div id="heatmap-container" class="heatmap-wrapper" style="display:none">
+<div id="months" class="months"></div>
+<div id="heatmap" class="heatmap"></div>
+<div class="legend">
+Less <div class="day l0"></div><div class="day l1"></div><div class="day l2"></div><div class="day l3"></div><div class="day l4"></div> More
+</div>
+</div>
+<div id="stats" class="stats" style="display:none"></div>
+</div>
+<script>
+const API_URL = 'https://www.owockibot.xyz/api/bounty-board';
+let allActivities = [];
+let activeTypes = { claim: true, submission: true, completion: true, payout: true };
+let walletFilter = '';
+
+async function loadActivitiesFromAPI() {
+  const res = await fetch(API_URL);
+  if (!res.ok) throw new Error('API returned ' + res.status);
+  const bounties = await res.json();
+  console.log('API DATA:', bounties);
+  const events = [];
+  for (const b of bounties) {
+    const claimer = b.claimer_address;
+    const reward = b.reward_usdc || 0;
+    const dateStr = (b.updated_at || b.created_at).slice(0, 10);
+    const createdStr = b.created_at ? b.created_at.slice(0, 10) : dateStr;
+    if (claimer) {
+      events.push({ date: createdStr, type: 'claim', wallet: claimer, amount: 0 });
+    }
+    if (b.submission_url) {
+      events.push({ date: dateStr, type: 'submission', wallet: claimer || '', amount: 0 });
+    }
+    if (b.status === 'completed' || b.status === 'approved' || b.status === 'submitted') {
+      events.push({ date: dateStr, type: 'completion', wallet: claimer || '', amount: 0 });
+      events.push({ date: dateStr, type: 'payout', wallet: claimer || '', amount: reward });
+    }
+  }
+  return events;
+}
+
+function getFilteredActivities() {
+  return allActivities.filter(a => {
+    if (!activeTypes[a.type]) return false;
+    if (walletFilter && a.wallet.toLowerCase() !== walletFilter.toLowerCase()) return false;
+    return true;
+  });
+}
+
+function getActivityByDate(activities) {
+  const map = {};
+  for (const a of activities) {
+    if (!map[a.date]) map[a.date] = { total: 0, types: {} };
+    map[a.date].total++;
+    map[a.date].types[a.type] = (map[a.date].types[a.type] || 0) + 1;
+  }
+  return map;
+}
+
+function getLevel(count) {
+  if (count === 0) return 'l0';
+  if (count <= 2) return 'l1';
+  if (count <= 5) return 'l2';
+  if (count <= 10) return 'l3';
+  return 'l4';
+}
+
+function render() {
+  const activities = getFilteredActivities();
+  const byDate = getActivityByDate(activities);
+  const heatmap = document.getElementById('heatmap');
+  const monthsEl = document.getElementById('months');
+  heatmap.innerHTML = '';
+  monthsEl.innerHTML = '';
+  const today = new Date();
+  const weeks = 53;
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - (weeks * 7 - 1) - startDate.getDay());
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let lastMonth = -1;
+  for (let w = 0; w < weeks; w++) {
+    const weekEl = document.createElement('div');
+    weekEl.className = 'week';
+    const monthSpan = document.createElement('span');
+    if (w < weeks) {
+      const d = new Date(startDate);
+      d.setDate(d.getDate() + w * 7);
+      if (d.getMonth() !== lastMonth) {
+        monthSpan.textContent = monthNames[d.getMonth()];
+        monthSpan.className = 'month-label';
+        lastMonth = d.getMonth();
+      }
+    }
+    monthsEl.appendChild(monthSpan || document.createElement('span'));
+    for (let dow = 0; dow < 7; dow++) {
+      const cellDate = new Date(startDate);
+      cellDate.setDate(cellDate.getDate() + w * 7 + dow);
+      const key = cellDate.toISOString().slice(0, 10);
+      const count = byDate[key] ? byDate[key].total : 0;
+      const dayEl = document.createElement('div');
+      dayEl.className = 'day ' + getLevel(count);
+      dayEl.dataset.date = key;
+      if (byDate[key]) {
+        const tip = document.createElement('div');
+        tip.className = 'tooltip';
+        const bd = byDate[key];
+        let html = '<strong>' + key + '</strong><br>' + bd.total + ' event' + (bd.total > 1 ? 's' : '');
+        if (bd.types.claim) html += '<br>Claims: ' + bd.types.claim;
+        if (bd.types.submission) html += '<br>Submissions: ' + bd.types.submission;
+        if (bd.types.completion) html += '<br>Completions: ' + bd.types.completion;
+        if (bd.types.payout) html += '<br>Payouts: ' + bd.types.payout;
+        tip.innerHTML = html;
+        dayEl.appendChild(tip);
+      }
+      weekEl.appendChild(dayEl);
+    }
+    heatmap.appendChild(weekEl);
+  }
+  renderStats(activities);
+}
+
+function renderStats(activities) {
+  const statsEl = document.getElementById('stats');
+  const total = activities.length;
+  const payouts = activities.filter(a => a.type === 'payout');
+  const totalUSDC = payouts.reduce((s, a) => s + a.amount, 0);
+  const days = new Set(activities.map(a => a.date));
+  const sorted = [...days].sort();
+  let streak = 0, cur = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const d1 = new Date(sorted[i - 1]), d2 = new Date(sorted[i]);
+    const diff = (d2 - d1) / 86400000;
+    cur = diff === 1 ? cur + 1 : 0;
+    if (cur > streak) streak = cur;
+  }
+  streak = sorted.length > 0 ? streak + 1 : 0;
+  statsEl.innerHTML = `
+    <div class="stat"><div class="stat-value">${total}</div><div class="stat-label">Total Events</div></div>
+    <div class="stat"><div class="stat-value">${totalUSDC.toFixed(0)} USDC</div><div class="stat-label">Total Payouts</div></div>
+    <div class="stat"><div class="stat-value">${days.size}</div><div class="stat-label">Active Days</div></div>
+    <div class="stat"><div class="stat-value">${streak}</div><div class="stat-label">Longest Streak</div></div>
+  `;
+  statsEl.style.display = 'flex';
+}
+
+function setupControls() {
+  document.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.type;
+      activeTypes[t] = !activeTypes[t];
+      btn.classList.toggle('active');
+      render();
+    });
+  });
+  document.getElementById('wallet-filter').addEventListener('input', e => {
+    walletFilter = e.target.value.trim();
+    render();
+  });
+}
+
+async function init() {
+  try {
+    allActivities = await loadActivitiesFromAPI();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('controls').style.display = 'flex';
+    document.getElementById('heatmap-container').style.display = 'block';
+    setupControls();
+    render();
+  } catch (err) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error-container').innerHTML = '<div class="error">Failed to load API data: ' + err.message + '</div>';
+  }
+}
+
+init();
+</script>
+</body>
+</html>
