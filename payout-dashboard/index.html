@@ -17,14 +17,16 @@ h1{text-align:center;color:#39d353;font-size:1.8em;margin-bottom:5px}
 .chart-section{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:25px}
 .chart-section h2{color:#58a6ff;font-size:1.2em;margin-bottom:15px}
 canvas{width:100%!important;height:300px!important}
-.table-wrap{overflow-x:auto}
+.table-wrap{overflow-x:auto;max-height:500px;overflow-y:auto}
 table{width:100%;border-collapse:collapse;font-size:.85em}
-th{background:#21262d;color:#58a6ff;padding:10px;text-align:left;position:sticky;top:0}
+th{background:#21262d;color:#58a6ff;padding:10px;text-align:left;position:sticky;top:0;z-index:1}
 td{padding:8px 10px;border-bottom:1px solid #21262d}
 tr:hover{background:#161b22}
 a{color:#58a6ff;text-decoration:none}
 a:hover{text-decoration:underline}
 .loading{text-align:center;padding:60px;color:#8b949e}
+.progress-bar{width:300px;height:8px;background:#21262d;border-radius:4px;margin:15px auto;overflow:hidden}
+.progress-fill{height:100%;background:#39d353;border-radius:4px;transition:width .3s}
 .error{text-align:center;padding:40px;color:#f85149}
 .refresh-btn{background:#238636;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.9em;margin-bottom:20px}
 .refresh-btn:hover{background:#2ea043}
@@ -36,15 +38,20 @@ a:hover{text-decoration:underline}
 .tabs{display:flex;gap:5px;margin-bottom:15px}
 .tab{padding:8px 16px;background:#21262d;border:1px solid #30363d;border-radius:6px;cursor:pointer;color:#8b949e;font-size:.85em}
 .tab.active{background:#1a2a3a;color:#58a6ff;border-color:#58a6ff}
+.cached-note{text-align:center;color:#8b949e;font-size:.75em;margin-bottom:10px}
 </style>
 </head>
 <body>
 <div class="container">
 <h1>💰 Owockibot Payout Transparency</h1>
 <p class="subtitle">Safe: 0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be on Base &bull; USDC Payouts Only</p>
-<button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
-<div id="loading" class="loading">Loading payout data...</div>
+<button class="refresh-btn" onclick="loadData(true)">↻ Refresh</button>
+<div id="loading" class="loading">
+<div id="loadingText">Loading payout data...</div>
+<div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+</div>
 <div id="content" style="display:none">
+<div id="cachedNote" class="cached-note" style="display:none"></div>
 <div class="stats" id="stats"></div>
 <div class="chart-section">
 <h2>📊 Payout Timeline</h2>
@@ -72,46 +79,78 @@ a:hover{text-decoration:underline}
 </div>
 <script>
 const SAFE="0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be";
-const API="https://api.safe.global/tx-service/base/api/v1/safes/"+SAFE+"/multisig-transactions/?limit=100&trusted=true";
-const USDC="0x833589fcd6edbe08f4c7c32d4f71b54bda02913";
+const API="https://api.safe.global/tx-service/base/api/v1/safes/"+SAFE+"/multisig-transactions/?limit=100&trusted=true&executed=true&to=0x833589fcd6edbe08f4c7c32d4f71b54bda02913";
 const BASESCAN="https://basescan.org/tx/";
 let allPayouts=[];
 let currentTab="all";
+const CACHE_KEY="owockibot_payouts_cache";
+const CACHE_TTL=10*60*1000;
 function tr(addr){if(!addr||addr.length<10)return addr;return addr.slice(0,8)+"..."+addr.slice(-6);}
-async function loadData(){
+function setProgress(pct,msg){
+  document.getElementById("progressFill").style.width=pct+"%";
+  if(msg)document.getElementById("loadingText").textContent=msg;
+}
+function getCachedPayouts(){
+  try{const c=localStorage.getItem(CACHE_KEY);if(!c)return null;const d=JSON.parse(c);if(Date.now()-d.ts>CACHE_TTL){localStorage.removeItem(CACHE_KEY);return null;}return d.payouts;}catch(e){return null;}
+}
+function setCachedPayouts(p){try{localStorage.setItem(CACHE_KEY,JSON.stringify({ts:Date.now(),payouts:p}));}catch(e){}}
+async function loadData(forceRefresh){
   document.getElementById("loading").style.display="block";
   document.getElementById("content").style.display="none";
-  try{
-    let allTx=[];let offset=0;
-    while(true){
-      const r=await fetch(API+"&offset="+offset);
-      const d=await r.json();
-      const res=d.results||[];
-      allTx=allTx.concat(res);
-      if(res.length<100)break;
-      offset+=100;
+  document.getElementById("cachedNote").style.display="none";
+  if(!forceRefresh){
+    const cached=getCachedPayouts();
+    if(cached){
+      allPayouts=cached;
+      setProgress(100,"Loaded from cache");
+      renderAll();
+      document.getElementById("loading").style.display="none";
+      document.getElementById("content").style.display="block";
+      const age=Math.round((Date.now()-JSON.parse(localStorage.getItem(CACHE_KEY)).ts)/60000);
+      document.getElementById("cachedNote").style.display="block";
+      document.getElementById("cachedNote").textContent="Data cached "+age+" min ago. Click Refresh for live data.";
+      return;
     }
+  }
+  try{
+    setProgress(10,"Connecting to Safe API...");
+    const first=await fetch(API+"&offset=0");
+    if(!first.ok)throw new Error("API returned "+first.status);
+    const firstData=await first.json();
+    const totalCount=firstData.count||0;
+    const pages=Math.ceil(totalCount/100)||1;
+    setProgress(30,"Fetching "+pages+" pages in parallel...");
+    const pagePromises=[];
+    for(let i=0;i<pages;i++){
+      pagePromises.push(fetch(API+"&offset="+(i*100)).then(r=>{if(!r.ok)throw new Error("API "+r.status);return r.json();}));
+    }
+    const allPages=await Promise.all(pagePromises);
+    setProgress(80,"Processing "+totalCount+" transactions...");
+    let allTx=[];
+    for(const d of allPages){
+      const res=d.results||[];
+      const usdcTx=res.filter(t=>{const dd=t.dataDecoded||{};return dd.method==="transfer";});
+      allTx=allTx.concat(usdcTx);
+    }
+    setProgress(90,"Processing payouts...");
     allPayouts=[];
     for(const t of allTx){
-      const toAddr=(t.to||"").toLowerCase();
-      const dd=t.dataDecoded||{};
-      const method=dd.method||"";
-      if(toAddr===USDC&&method==="transfer"&&t.isExecuted){
-        const params=dd.parameters||[];
-        let recipient="",amountRaw=0;
-        for(const p of params){
-          if(p.name==="to")recipient=p.value||"";
-          if(p.name==="value")amountRaw=parseInt(p.value||"0");
-        }
-        allPayouts.push({date:t.executionDate?t.executionDate.slice(0,10):"",recipient,amount:amountRaw/1e6,txHash:t.transactionHash||"",nonce:t.nonce||0});
+      const params=(t.dataDecoded&&t.dataDecoded.parameters)||[];
+      let recipient="",amountRaw=0;
+      for(const p of params){
+        if(p.name==="to")recipient=p.value||"";
+        if(p.name==="value")amountRaw=parseInt(p.value||"0");
       }
+      allPayouts.push({date:t.executionDate?t.executionDate.slice(0,10):"",recipient,amount:amountRaw/1e6,txHash:t.transactionHash||"",nonce:t.nonce||0});
     }
     allPayouts.sort((a,b)=>a.date.localeCompare(b.date));
+    setCachedPayouts(allPayouts);
+    setProgress(100,"Done!");
     renderAll();
     document.getElementById("loading").style.display="none";
     document.getElementById("content").style.display="block";
   }catch(e){
-    document.getElementById("loading").innerHTML="<div class="error">Failed to load data: "+e.message+"</div>";
+    document.getElementById("loading").innerHTML="<div class=\"error\">Failed to load data: "+e.message+"<br><button onclick=\"loadData(true)\" style=\"margin-top:10px;background:#238636;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer\">Retry</button></div>";
   }
 }
 function renderAll(){
@@ -120,11 +159,11 @@ function renderAll(){
   const unique=new Set(allPayouts.map(p=>p.recipient)).size;
   const maxPayout=allPayouts.length?Math.max(...allPayouts.map(p=>p.amount)):0;
   document.getElementById("stats").innerHTML=
-    "<div class="stat"><div class="stat-value">$"+total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})+"</div><div class="stat-label">Total USDC Paid Out</div></div>"+
-    "<div class="stat"><div class="stat-value">"+allPayouts.length+"</div><div class="stat-label">Total Payouts</div></div>"+
-    "<div class="stat"><div class="stat-value">$"+avg.toFixed(2)+"</div><div class="stat-label">Average Payout</div></div>"+
-    "<div class="stat"><div class="stat-value">"+unique+"</div><div class="stat-label">Unique Builders</div></div>"+
-    "<div class="stat"><div class="stat-value">$"+maxPayout.toFixed(2)+"</div><div class="stat-label">Largest Payout</div></div>";
+    "<div class=\"stat\"><div class=\"stat-value\">$"+total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})+"</div><div class=\"stat-label\">Total USDC Paid Out</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">"+allPayouts.length+"</div><div class=\"stat-label\">Total Payouts</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">$"+avg.toFixed(2)+"</div><div class=\"stat-label\">Average Payout</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">"+unique+"</div><div class=\"stat-label\">Unique Builders</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">$"+maxPayout.toFixed(2)+"</div><div class=\"stat-label\">Largest Payout</div></div>";
   renderTimeline();
   renderTopBuilders();
   renderTable();
@@ -155,16 +194,16 @@ function renderTopBuilders(){
   const earnings={};
   for(const p of allPayouts){earnings[p.recipient]=(earnings[p.recipient]||0)+p.amount;}
   const sorted=Object.entries(earnings).sort((a,b)=>b[1]-a[1]);
-  document.getElementById("topBuilders").innerHTML=sorted.map(([addr,amt],i)=>"<div class="builder-card"><span class="builder-rank">#"+(i+1)+"</span><span class="builder-addr" title=""+addr+"">"+tr(addr)+"</span><span class="builder-earn">$"+amt.toFixed(2)+"</span></div>").join("");
+  document.getElementById("topBuilders").innerHTML=sorted.map(([addr,amt],i)=>"<div class=\"builder-card\"><span class=\"builder-rank\">#"+(i+1)+"</span><span class=\"builder-addr\" title=\""+addr+"\">"+tr(addr)+"</span><span class=\"builder-earn\">$"+amt.toFixed(2)+"</span></div>").join("");
 }
 function showTab(tab,el){currentTab=tab;document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));el.classList.add("active");renderTable();}
 function renderTable(){
   let filtered=allPayouts;
   if(currentTab==="big")filtered=allPayouts.filter(p=>p.amount>=50);
   if(currentTab==="small")filtered=allPayouts.filter(p=>p.amount<50);
-  document.getElementById("txBody").innerHTML=filtered.map(p=>"<tr><td>"+p.date+"</td><td><a href=""+BASESCAN+p.txHash+"" title=""+p.recipient+"">"+tr(p.recipient)+"</a></td><td>$"+p.amount.toFixed(2)+"</td><td>"+p.nonce+"</td><td><a href=""+BASESCAN+p.txHash+"" target="_blank">View ↗</a></td></tr>").join("");
+  document.getElementById("txBody").innerHTML=filtered.map(p=>"<tr><td>"+p.date+"</td><td><a href=\""+BASESCAN+p.txHash+"\" title=\""+p.recipient+"\">"+tr(p.recipient)+"</a></td><td>$"+p.amount.toFixed(2)+"</td><td>"+p.nonce+"</td><td><a href=\""+BASESCAN+p.txHash+"\" target=\"_blank\">View ↗</a></td></tr>").join("");
 }
-loadData();
+loadData(false);
 </script>
 </body>
 </html>
