@@ -6,15 +6,239 @@
 <title>Owockibot Bounty Payout Transparency Dashboard</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0d1117;color:#c9d1d9;line-height:1.6}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;line-height:1.6}
 .container{max-width:1200px;margin:0 auto;padding:20px}
 h1{text-align:center;color:#39d353;font-size:1.8em;margin-bottom:5px}
 .subtitle{text-align:center;color:#8b949e;font-size:.9em;margin-bottom:25px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:15px;margin-bottom:30px}
+.stat{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;text-align:center}
+.stat-value{font-size:2em;font-weight:bold;color:#39d353}
+.stat-label{color:#8b949e;font-size:.85em;margin-top:5px}
+.chart-section{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:25px}
+.chart-section h2{color:#58a6ff;font-size:1.2em;margin-bottom:15px}
+.chart-container{position:relative;width:100%;height:280px}
+canvas{display:block}
+.table-wrap{overflow-x:auto;max-height:500px;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:.85em}
+th{background:#21262d;color:#58a6ff;padding:10px;text-align:left;position:sticky;top:0;z-index:1}
+td{padding:8px 10px;border-bottom:1px solid #21262d}
+tr:hover{background:#161b22}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.loading{text-align:center;padding:60px;color:#8b949e}
+.progress-bar{width:300px;height:8px;background:#21262d;border-radius:4px;margin:15px auto;overflow:hidden}
+.progress-fill{height:100%;background:#39d353;border-radius:4px;transition:width .3s}
+.error{text-align:center;padding:40px;color:#f85149}
+.refresh-btn{background:#238636;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:.9em;margin-bottom:20px}
+.refresh-btn:hover{background:#2ea043}
+.top-builders{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin-bottom:20px}
+.builder-card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px;display:flex;justify-content:space-between;align-items:center}
+.builder-rank{color:#8b949e;font-size:.8em;width:30px}
+.builder-addr{font-family:monospace;font-size:.8em;color:#c9d1d9;flex:1;margin:0 10px}
+.builder-earn{color:#39d353;font-weight:bold;font-size:.95em}
+.tabs{display:flex;gap:5px;margin-bottom:15px}
+.tab{padding:8px 16px;background:#21262d;border:1px solid #30363d;border-radius:6px;cursor:pointer;color:#8b949e;font-size:.85em}
+.tab.active{background:#1a2a3a;color:#58a6ff;border-color:#58a6ff}
+.cached-note{text-align:center;color:#8b949e;font-size:.75em;margin-bottom:10px}
 </style>
 </head>
 <body>
 <div class="container">
-<h1>Test Fix</h1>
+<h1>💰 Owockibot Payout Transparency</h1>
+<p class="subtitle">Safe: 0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be on Base &bull; USDC Payouts Only</p>
+<button class="refresh-btn" onclick="loadData(true)">↻ Refresh</button>
+<div id="loading" class="loading">
+<div id="loadingText">Loading payout data...</div>
+<div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
 </div>
+<div id="content" style="display:none">
+<div id="cachedNote" class="cached-note" style="display:none"></div>
+<div class="stats" id="stats"></div>
+<div class="chart-section">
+<h2>📊 Payout Timeline</h2>
+<div class="chart-container" id="chartContainer">
+<canvas id="timelineChart"></canvas>
+</div>
+</div>
+<div class="chart-section">
+<h2>🏆 Top Builders by Earnings</h2>
+<div class="top-builders" id="topBuilders"></div>
+</div>
+<div class="chart-section">
+<h2>📋 All Payout Transactions</h2>
+<div class="tabs">
+<div class="tab active" onclick="showTab('all',this)">All</div>
+<div class="tab" onclick="showTab('big',this)">Big (50+ USDC)</div>
+<div class="tab" onclick="showTab('small',this)">Small (&lt;50 USDC)</div>
+</div>
+<div class="table-wrap">
+<table id="txTable">
+<thead><tr><th>Date</th><th>Recipient</th><th>Amount (USDC)</th><th>Nonce</th><th>Basescan</th></tr></thead>
+<tbody id="txBody"></tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<script>
+const SAFE="0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be";
+const API="https://api.safe.global/tx-service/base/api/v1/safes/"+SAFE+"/multisig-transactions/?limit=100&trusted=true&executed=true&to=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const BASESCAN="https://basescan.org/tx/";
+let allPayouts=[];
+let currentTab="all";
+const CACHE_KEY="owockibot_payouts_cache";
+const CACHE_TTL=10*60*1000;
+
+function tr(addr){if(!addr||addr.length<10)return addr;return addr.slice(0,8)+"..."+addr.slice(-6);}
+
+function setProgress(pct,msg){
+  var pf=document.getElementById("progressFill");
+  var lt=document.getElementById("loadingText");
+  if(pf)pf.style.width=pct+"%";
+  if(lt&&msg)lt.textContent=msg;
+}
+
+function getCachedPayouts(){
+  try{var c=localStorage.getItem(CACHE_KEY);if(!c)return null;var d=JSON.parse(c);if(Date.now()-d.ts>CACHE_TTL){localStorage.removeItem(CACHE_KEY);return null;}return d.payouts;}catch(e){return null;}
+}
+
+function setCachedPayouts(p){try{localStorage.setItem(CACHE_KEY,JSON.stringify({ts:Date.now(),payouts:p}));}catch(e){}}
+
+function showContent(){
+  document.getElementById("loading").style.display="none";
+  document.getElementById("content").style.display="block";
+}
+
+function renderAll(){
+  showContent();
+  var total=allPayouts.reduce(function(s,p){return s+p.amount;},0);
+  var avg=allPayouts.length?total/allPayouts.length:0;
+  var unique=new Set(allPayouts.map(function(p){return p.recipient;})).size;
+  var maxPayout=allPayouts.length?Math.max.apply(null,allPayouts.map(function(p){return p.amount;})):0;
+  document.getElementById("stats").innerHTML=
+    "<div class=\"stat\"><div class=\"stat-value\">$"+total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})+"</div><div class=\"stat-label\">Total USDC Paid Out</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">"+allPayouts.length+"</div><div class=\"stat-label\">Total Payouts</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">$"+avg.toFixed(2)+"</div><div class=\"stat-label\">Average Payout</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">"+unique+"</div><div class=\"stat-label\">Unique Builders</div></div>"+
+    "<div class=\"stat\"><div class=\"stat-value\">$"+maxPayout.toFixed(2)+"</div><div class=\"stat-label\">Largest Payout</div></div>";
+  setTimeout(function(){renderTimeline();renderTopBuilders();renderTable();},50);
+}
+
+function renderTimeline(){
+  var monthly={};
+  for(var i=0;i<allPayouts.length;i++){var m=allPayouts[i].date.slice(0,7);monthly[m]=(monthly[m]||0)+allPayouts[i].amount;}
+  var labels=Object.keys(monthly).sort();
+  var data=labels.map(function(l){return monthly[l];});
+  var canvas=document.getElementById("timelineChart");
+  if(!canvas)return;
+  var container=document.getElementById("chartContainer");
+  if(!container)return;
+  var cw=container.clientWidth||600;
+  var w=canvas.width=cw;
+  var h=canvas.height=260;
+  var ctx=canvas.getContext("2d");
+  var maxV=Math.max.apply(null,data)*1.1||1;
+  var barW=Math.min(60,(w-80)/labels.length-10);
+  if(barW<10)barW=10;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle="#8b949e";ctx.font="11px sans-serif";
+  for(var i=0;i<=4;i++){var y=h-20-i*(h-40)/4;var v=(maxV*i/4).toFixed(0);ctx.fillText("$"+v,0,y+4);ctx.strokeStyle="#21262d";ctx.beginPath();ctx.moveTo(50,y);ctx.lineTo(w-10,y);ctx.stroke();}
+  for(var i=0;i<labels.length;i++){
+    var x=60+i*(barW+10);var barH=(data[i]/maxV)*(h-50);
+    if(barH<1)barH=1;
+    var grd=ctx.createLinearGradient(x,h-20-barH,x,h-20);grd.addColorStop(0,"#39d353");grd.addColorStop(1,"#1a3a2a");
+    ctx.fillStyle=grd;ctx.fillRect(x,h-20-barH,barW,barH);
+    ctx.fillStyle="#8b949e";ctx.font="10px sans-serif";ctx.textAlign="center";ctx.fillText(labels[i].slice(2),x+barW/2,h-5);
+    ctx.fillStyle="#c9d1d9";ctx.font="10px sans-serif";ctx.fillText("$"+data[i].toFixed(0),x+barW/2,h-25-barH);
+  }
+}
+
+function renderTopBuilders(){
+  var earnings={};
+  for(var i=0;i<allPayouts.length;i++){earnings[allPayouts[i].recipient]=(earnings[allPayouts[i].recipient]||0)+allPayouts[i].amount;}
+  var sorted=Object.entries(earnings).sort(function(a,b){return b[1]-a[1];});
+  document.getElementById("topBuilders").innerHTML=sorted.map(function(e,i){return "<div class=\"builder-card\"><span class=\"builder-rank\">#"+(i+1)+"</span><span class=\"builder-addr\" title=\""+e[0]+"\">"+tr(e[0])+"</span><span class=\"builder-earn\">$"+e[1].toFixed(2)+"</span></div>";}).join("");
+}
+
+function showTab(tab,el){currentTab=tab;document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("active");});el.classList.add("active");renderTable();}
+
+function renderTable(){
+  var filtered=allPayouts;
+  if(currentTab==="big")filtered=allPayouts.filter(function(p){return p.amount>=50;});
+  if(currentTab==="small")filtered=allPayouts.filter(function(p){return p.amount<50;});
+  document.getElementById("txBody").innerHTML=filtered.map(function(p){return "<tr><td>"+p.date+"</td><td><a href=\""+BASESCAN+p.txHash+"\" title=\""+p.recipient+"\">"+tr(p.recipient)+"</a></td><td>$"+p.amount.toFixed(2)+"</td><td>"+p.nonce+"</td><td><a href=\""+BASESCAN+p.txHash+"\" target=\"_blank\">View ↗</a></td></tr>";}).join("");
+}
+
+async function loadData(forceRefresh){
+  var loadEl=document.getElementById("loading");
+  var contentEl=document.getElementById("content");
+  var cacheNoteEl=document.getElementById("cachedNote");
+  loadEl.style.display="block";
+  loadEl.innerHTML='<div id="loadingText">Loading payout data...</div><div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>';
+  contentEl.style.display="none";
+  cacheNoteEl.style.display="none";
+
+  if(!forceRefresh){
+    var cached=getCachedPayouts();
+    if(cached){
+      allPayouts=cached;
+      setProgress(100,"Loaded from cache");
+      renderAll();
+      var age=Math.round((Date.now()-JSON.parse(localStorage.getItem(CACHE_KEY)).ts)/60000);
+      cacheNoteEl.style.display="block";
+      cacheNoteEl.textContent="Data cached "+age+" min ago. Click Refresh for live data.";
+      return;
+    }
+  }
+
+  try{
+    setProgress(10,"Connecting to Safe API...");
+    var first=await fetch(API+"&offset=0");
+    if(!first.ok)throw new Error("API returned "+first.status);
+    var firstData=await first.json();
+    var totalCount=firstData.count||0;
+    if(totalCount===0){
+      allPayouts=[];
+      renderAll();
+      return;
+    }
+    var pages=Math.ceil(totalCount/100)||1;
+    setProgress(30,"Fetching "+pages+" pages in parallel...");
+    var pagePromises=[];
+    for(var i=0;i<pages;i++){
+      pagePromises.push(fetch(API+"&offset="+(i*100)).then(function(r){if(!r.ok)throw new Error("API "+r.status);return r.json();}));
+    }
+    var allPages=await Promise.all(pagePromises);
+    setProgress(80,"Processing "+totalCount+" transactions...");
+    var allTx=[];
+    for(var pi=0;pi<allPages.length;pi++){
+      var res=allPages[pi].results||[];
+      var usdcTx=res.filter(function(t){var dd=t.dataDecoded||{};return dd.method==="transfer";});
+      allTx=allTx.concat(usdcTx);
+    }
+    setProgress(90,"Processing payouts...");
+    allPayouts=[];
+    for(var ti=0;ti<allTx.length;ti++){
+      var t=allTx[ti];
+      var params=(t.dataDecoded&&t.dataDecoded.parameters)||[];
+      var recipient="",amountRaw=0;
+      for(var pi2=0;pi2<params.length;pi2++){
+        if(params[pi2].name==="to")recipient=params[pi2].value||"";
+        if(params[pi2].name==="value")amountRaw=parseInt(params[pi2].value||"0");
+      }
+      allPayouts.push({date:t.executionDate?t.executionDate.slice(0,10):"",recipient:recipient,amount:amountRaw/1e6,txHash:t.transactionHash||"",nonce:t.nonce||0});
+    }
+    allPayouts.sort(function(a,b){return a.date.localeCompare(b.date);});
+    setCachedPayouts(allPayouts);
+    setProgress(100,"Done!");
+    renderAll();
+  }catch(e){
+    var loadEl2=document.getElementById("loading");
+    if(loadEl2)loadEl2.innerHTML="<div class=\"error\">Failed to load data: "+e.message+"<br><button onclick=\"loadData(true)\" style=\"margin-top:10px;background:#238636;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer\">Retry</button></div>";
+  }
+}
+
+loadData(false);
+</script>
 </body>
 </html>
